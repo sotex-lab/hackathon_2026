@@ -1,0 +1,38 @@
+services:
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: sotex_hackathon_db
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      SA_PASSWORD: SotexSolutions123!
+      MSSQL_PID: Developer
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+
+  db-init:
+    build:
+      context: .
+      dockerfile: ./scripts/db-init.Dockerfile
+    container_name: sotex_hackathon_db_init
+    depends_on:
+      - db
+    environment:
+      SQLSERVER_HOST: db
+      SQLSERVER_PORT: 1433
+      SQLSERVER_USER: sa
+      SQLSERVER_PASSWORD: SotexSolutions123!
+      TARGET_DATABASE: SotexHackathon
+      BACPAC_URL: https://sotex-hackathon-851725191980-eu-central-1-an.s3.eu-central-1.amazonaws.com/SotexHackathon.bacpac
+      BACPAC_DIR: /bacpac
+    volumes:
+      - bacpac_data:/bacpac
+      - ./scripts:/scripts:ro
+    entrypoint: ["/bin/bash", "/scripts/init-db.sh"]
+    restart: "no"
+
+volumes:
+  sqlserver_data:
+  bacpac_data:
