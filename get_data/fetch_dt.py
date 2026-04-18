@@ -1,10 +1,8 @@
 """
 DT (Distribution Transformer) readings fetcher.
 
-Provides raw meter readings for a given DT over the last 24 hours.
-The 24h window is relative to each DT's own last reading
-(not the global database max), so inactive DTs still return their
-most recent available data.
+Returns V/I per phase AND total kWh for a given DT over the last 24h.
+Pulls from both MeterReads (voltage/current) and MeterReadTfes (energy).
 
 Usage:
     from fetch_dt import get_dt_readings_24h, list_active_dts, get_dt_info
@@ -20,24 +18,31 @@ import pandas as pd
 
 def get_dt_readings_24h(dt_id: int) -> pd.DataFrame | None:
     """
-    Fetch the last 24h of raw readings for a specific DT.
+    Fetch the last 24h of readings for a specific DT, combining
+    phase measurements (from MeterReads) with total energy
+    (from MeterReadTfes). Timestamps from both tables are merged;
+    missing values appear as None/NaN.
+
+    The 24h window is relative to the DT's own latest reading
+    across both tables, so inactive DTs still return their most
+    recent available data.
 
     Args:
         dt_id: DistributionSubstation.Id
 
     Returns:
-        DataFrame with 7 columns:
-            Ts    - timestamp of the reading (datetime)
-            V_a   - Phase A voltage (raw DB scale, divide by 100 for Volts)
+        DataFrame with 8 columns:
+            Ts    - timestamp (datetime)
+            V_a   - Phase A voltage  (raw DB scale; divide by 100 for Volts)
             V_b   - Phase B voltage
             V_c   - Phase C voltage
-            I_a   - Phase A current (raw DB scale, divide by 100 for Amps)
+            I_a   - Phase A current  (raw DB scale; divide by 100 for Amps)
             I_b   - Phase B current
             I_c   - Phase C current
+            kwh   - total energy counter (raw DB value from MeterReadTfes)
 
-        Each row is one timestamp; missing channel values appear as None/NaN.
-
-        Returns None if the DT doesn't exist, has no meter, or has no readings.
+        Returns None if the DT doesn't exist, has no meter,
+        or has no readings in either table.
     """
     # 1. Find the meter attached to this DT
     meter = q(
@@ -48,30 +53,47 @@ def get_dt_readings_24h(dt_id: int) -> pd.DataFrame | None:
         return None
     meter_id = int(meter.iloc[0]["MeterId"])
 
-    # 2. Find the latest timestamp for THIS meter (not global)
-    last = q(
-        "SELECT MAX(Ts) AS last_ts FROM MeterReads WHERE Mid = :mid",
-        {"mid": meter_id}
-    )
+    # 2. Latest timestamp across BOTH source tables for this meter
+    last = q("""
+        SELECT MAX(last_ts) AS last_ts FROM (
+            SELECT MAX(Ts) AS last_ts FROM MeterReads     WHERE Mid = :mid
+            UNION ALL
+            SELECT MAX(Ts)            FROM MeterReadTfes  WHERE Mid = :mid
+        ) t
+    """, {"mid": meter_id})
     last_ts = last.iloc[0]["last_ts"]
     if last_ts is None:
         return None
 
-    # 3. Pull all readings in the 24h window before last_ts,
-    #    pivoted so each timestamp is one row with 6 channel columns
+    # 3. FULL OUTER JOIN: pivot V/I per timestamp, merge with kWh
     readings = q("""
-        SELECT mr.Ts,
-            MAX(CASE WHEN mr.Cid = 6  THEN mr.Val END) AS V_a,
-            MAX(CASE WHEN mr.Cid = 7  THEN mr.Val END) AS V_b,
-            MAX(CASE WHEN mr.Cid = 8  THEN mr.Val END) AS V_c,
-            MAX(CASE WHEN mr.Cid = 9  THEN mr.Val END) AS I_a,
-            MAX(CASE WHEN mr.Cid = 10 THEN mr.Val END) AS I_b,
-            MAX(CASE WHEN mr.Cid = 11 THEN mr.Val END) AS I_c
-        FROM MeterReads mr
-        WHERE mr.Mid = :mid
-          AND mr.Ts > DATEADD(HOUR, -24, :last_ts)
-        GROUP BY mr.Ts
-        ORDER BY mr.Ts
+        WITH pivoted AS (
+            SELECT mr.Ts,
+                MAX(CASE WHEN mr.Cid = 6  THEN mr.Val END) AS V_a,
+                MAX(CASE WHEN mr.Cid = 7  THEN mr.Val END) AS V_b,
+                MAX(CASE WHEN mr.Cid = 8  THEN mr.Val END) AS V_c,
+                MAX(CASE WHEN mr.Cid = 9  THEN mr.Val END) AS I_a,
+                MAX(CASE WHEN mr.Cid = 10 THEN mr.Val END) AS I_b,
+                MAX(CASE WHEN mr.Cid = 11 THEN mr.Val END) AS I_c
+            FROM MeterReads mr
+            WHERE mr.Mid = :mid
+              AND mr.Ts > DATEADD(HOUR, -24, :last_ts)
+            GROUP BY mr.Ts
+        ),
+        tfes AS (
+            SELECT Ts, Val AS kwh
+            FROM MeterReadTfes
+            WHERE Mid = :mid
+              AND Ts > DATEADD(HOUR, -24, :last_ts)
+        )
+        SELECT
+            COALESCE(p.Ts, t.Ts) AS Ts,
+            p.V_a, p.V_b, p.V_c,
+            p.I_a, p.I_b, p.I_c,
+            t.kwh
+        FROM pivoted p
+        FULL OUTER JOIN tfes t ON p.Ts = t.Ts
+        ORDER BY Ts
     """, {"mid": meter_id, "last_ts": last_ts})
 
     return readings if not readings.empty else None
@@ -110,7 +132,8 @@ def get_dt_info(dt_id: int) -> dict | None:
 
 def list_active_dts() -> pd.DataFrame:
     """
-    List all DTs that have at least one meter reading.
+    List all DTs that have at least one meter reading in either
+    MeterReads or MeterReadTfes.
     Useful for populating a dropdown, filter list, or map layer.
 
     Returns:
@@ -121,11 +144,20 @@ def list_active_dts() -> pd.DataFrame:
             last_reading   - timestamp of the most recent reading (datetime)
     """
     return q("""
+        WITH any_reads AS (
+            SELECT Mid, MAX(Ts) AS last_ts FROM MeterReads    GROUP BY Mid
+            UNION ALL
+            SELECT Mid, MAX(Ts)            FROM MeterReadTfes GROUP BY Mid
+        ),
+        per_meter AS (
+            SELECT Mid, MAX(last_ts) AS last_reading
+            FROM any_reads
+            GROUP BY Mid
+        )
         SELECT dt.Id AS id, dt.Name AS name, dt.MeterId AS meter_id,
-               MAX(mr.Ts) AS last_reading
+               pm.last_reading
         FROM DistributionSubstation dt
-        JOIN MeterReads mr ON dt.MeterId = mr.Mid
-        GROUP BY dt.Id, dt.Name, dt.MeterId
+        JOIN per_meter pm ON dt.MeterId = pm.Mid
         ORDER BY dt.Name
     """)
 
