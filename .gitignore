@@ -1,2 +1,2 @@
 *.bacpac
-/venv
+venv/
