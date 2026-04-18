@@ -36,6 +36,8 @@
     .legend b {
       font-size: 13px;
     }
+
+    
     .legend i {
       width: 14px;
       height: 14px;
@@ -63,63 +65,98 @@
       gap: 6px;
     }
 
+    /* Modal */
     .modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.35);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
 
-.modal {
-  background: white;
-  border-radius: 10px;
-  box-shadow: 0 10px 25px rgba(0,0,0,0.3);
-  padding: 16px 20px;
-  min-width: 320px;
-  max-width: 480px;
-}
+    .modal {
+      background: white;
+      border-radius: 10px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+      padding: 16px 20px;
+      min-width: 320px;
+      max-width: 480px;
+    }
 
-.modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
-}
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
 
-.modal-header h2 {
-  margin: 0;
-  font-size: 18px;
-}
+    .modal-header h2 {
+      margin: 0;
+      font-size: 18px;
+    }
 
-#modal-close {
-  border: none;
-  background: transparent;
-  font-size: 20px;
-  cursor: pointer;
-}
+    #modal-close {
+      border: none;
+      background: transparent;
+      font-size: 20px;
+      cursor: pointer;
+    }
 
-.modal-body {
-  font-size: 14px;
-}
+    .modal-body {
+      font-size: 14px;
+    }
   </style>
 </head>
 <body>
   <div id="map"></div>
-  <div id="details-modal" class="modal-backdrop" style="display:none;">
-  <div class="modal">
-    <div class="modal-header">
-      <h2 id="modal-title">Detalji stanice</h2>
-      <button id="modal-close">&times;</button>
-    </div>
-    <div class="modal-body">
-      <p>Ovde će ići detaljni graf/plot za odabranu stanicu.</p>
-      <p id="modal-info" style="font-size:13px;color:#4b5563;"></p>
+
+  <!-- Search bar -->
+  <div id="search-container" style="
+    position: fixed;
+    top: 120px;
+    left: 50px;
+    z-index:1001;
+  ">
+    <div style="
+      padding: 8px 10px;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.2);
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    ">
+      <input
+        id="search-input"
+        type="text"
+        placeholder="Naziv stanice..."
+        style="padding:4px 8px;font-size:13px;min-width:200px;border:1px solid #d1d5db;border-radius:4px;"
+      />
+      <button
+        id="search-btn"
+        style="padding:4px 8px;font-size:13px;border-radius:4px;border:1px solid #d1d5db;background:#f9fafb;cursor:pointer;"
+      >
+        Pronađi
+      </button>
     </div>
   </div>
-</div>
+
+  <!-- Modal za detalje -->
+  <div id="details-modal" class="modal-backdrop" style="display:none;">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="modal-title">Detalji stanice</h2>
+        <button id="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p>Ovde će ići detaljni graf/plot za odabranu stanicu.</p>
+        <p id="modal-info" style="font-size:13px;color:#4b5563;"></p>
+      </div>
+    </div>
+  </div>
+
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <script>
@@ -129,7 +166,7 @@
       attribution: '&copy; OpenStreetMap'
     }).addTo(map);
 
-    // 1. Granice Nigerije
+    // Granice Nigerije
     fetch("/static/nigeria.json")
       .then(res => res.json())
       .then(data => {
@@ -138,34 +175,40 @@
         }).addTo(map);
       });
 
-      // MODAL
+    // MODAL
+    const modalEl = document.getElementById('details-modal');
+    const modalTitleEl = document.getElementById('modal-title');
+    const modalInfoEl = document.getElementById('modal-info');
+    const modalCloseBtn = document.getElementById('modal-close');
 
-const modalEl = document.getElementById('details-modal');
-const modalTitleEl = document.getElementById('modal-title');
-const modalInfoEl = document.getElementById('modal-info');
-const modalCloseBtn = document.getElementById('modal-close');
+    function openModal(stationName, stationType) {
+      modalTitleEl.textContent = stationName || 'Detalji stanice';
+      modalInfoEl.textContent =
+        `Tip stanice: ${stationType.toUpperCase()}. Ovde će kolege ubaciti plot i dodatne informacije.`;
+      modalEl.style.display = 'flex';
+    }
 
-function openModal(stationName, stationType) {
-  modalTitleEl.textContent = stationName || 'Detalji stanice';
-  modalInfoEl.textContent = `Tip stanice: ${stationType.toUpperCase()}. Ovde će kolege ubaciti plot i dodatne informacije.`;
-  modalEl.style.display = 'flex';
-}
+    function closeModal() {
+      modalEl.style.display = 'none';
+    }
 
-function closeModal() {
-  modalEl.style.display = 'none';
-}
+    modalCloseBtn.addEventListener('click', closeModal);
+    modalEl.addEventListener('click', (e) => {
+      if (e.target === modalEl) {
+        closeModal();
+      }
+    });
 
-modalCloseBtn.addEventListener('click', closeModal);
-modalEl.addEventListener('click', (e) => {
-  if (e.target === modalEl) {
-    closeModal(); // klik na pozadinu zatvara modal
-  }
-});
+    // Globalne promenljive za search
+    let allFeatures = [];
+    const featureMarkers = {};
 
-    // 2. Učitavanje svih stanica
+    // Učitavanje svih stanica
     fetch("/data/trafostanice")
       .then(res => res.json())
       .then(data => {
+        allFeatures = data.features;
+
         const colors = {
           transmission: "#ff4757",
           substation: "#3742fa",
@@ -173,21 +216,20 @@ modalEl.addEventListener('click', (e) => {
         };
 
         const sizeConfig = {
-          transmission: 18,  // velike
-          substation: 13,    // srednje
-          distribution: 7    // male
+          transmission: 18,
+          substation: 13,
+          distribution: 7
         };
 
         const counts = { transmission: 0, substation: 0, distribution: 0 };
 
-        // Kreiramo odvojene slojeve po tipu
         const layers = {
           transmission: L.layerGroup(),
           substation: L.layerGroup(),
           distribution: L.layerGroup()
         };
 
-        data.features.forEach(f => {
+        allFeatures.forEach((f, idx) => {
           const tip = f.properties.tip;
           if (!counts[tip]) counts[tip] = 0;
           counts[tip]++;
@@ -195,47 +237,45 @@ modalEl.addEventListener('click', (e) => {
           const r = sizeConfig[tip] || 8;
           const color = colors[tip] || "#ffa502";
 
-          const marker = L.circleMarker(
-            [f.geometry.coordinates[1], f.geometry.coordinates[0]],
-            {
-              radius: r,
-              fillColor: color,
-              color: "#ffffff",
-              weight: 1.5,
-              fillOpacity: 0.85
-            }
-          );
-          marker.on('click', () => {
-  map.flyTo(
-    [f.geometry.coordinates[1], f.geometry.coordinates[0]],
-    10,                         // željeni zoom nivo
-    { animate: true, duration: 1.0 }
-  );
-});
+          const lat = f.geometry.coordinates[1];
+          const lon = f.geometry.coordinates[0];
 
-marker.bindPopup(`
-  <div style="text-align:center">
-    <b style="color:${color}">${tip.toUpperCase()}</b><br>
-    <strong>${f.properties.naziv}</strong><br>
-    <button
-      type="button"
-      style="margin-top:6px;padding:4px 8px;font-size:12px;border-radius:6px;border:1px solid #d1d5db;cursor:pointer;background:#f9fafb;"
-      onclick="openModal('${(f.properties.naziv || '').replace(/'/g, "\\'")}', '${tip}')"
-    >
-      Detalji
-    </button>
-  </div>
-`);
+          const marker = L.circleMarker([lat, lon], {
+            radius: r,
+            fillColor: color,
+            color: "#ffffff",
+            weight: 1.5,
+            fillOpacity: 0.85
+          });
+
+          // Zoom na klik
+          marker.on('click', () => {
+            map.flyTo([lat, lon], 10, { animate: true, duration: 1.0 });
+          });
+
+          marker.bindPopup(`
+            <div style="text-align:center">
+              <b style="color:${color}">${tip.toUpperCase()}</b><br>
+              <strong>${f.properties.naziv}</strong><br>
+              <button
+                type="button"
+                style="margin-top:6px;padding:4px 8px;font-size:12px;border-radius:6px;border:1px solid #d1d5db;cursor:pointer;background:#f9fafb;"
+                onclick="openModal('${(f.properties.naziv || '').replace(/'/g, "\\'")}', '${tip}')"
+              >
+                Detalji
+              </button>
+            </div>
+          `);
 
           layers[tip].addLayer(marker);
+          featureMarkers[idx] = marker;
         });
 
-        // Podrazumevano dodaj sve slojeve
         layers.transmission.addTo(map);
         layers.substation.addTo(map);
         layers.distribution.addTo(map);
 
-        // 3. Legenda (kao kod koleginice)
+        // Legenda
         const legend = L.control({ position: 'bottomright' });
         legend.onAdd = function () {
           const div = L.DomUtil.create('div', 'legend');
@@ -258,7 +298,7 @@ marker.bindPopup(`
         };
         legend.addTo(map);
 
-        // 4. Toggle kontrola za slojeve
+        // Toggle slojeva
         const toggle = L.control({ position: 'topright' });
         toggle.onAdd = function () {
           const div = L.DomUtil.create('div', 'layer-toggle');
@@ -279,38 +319,66 @@ marker.bindPopup(`
             </label>
           `;
 
-          // Spreči scroll mapu kad klikćeš po div-u
           L.DomEvent.disableClickPropagation(div);
           return div;
         };
         toggle.addTo(map);
 
-        // Eventi za toggle
         document.getElementById('chk-transmission').addEventListener('change', (e) => {
-          if (e.target.checked) {
-            map.addLayer(layers.transmission);
-          } else {
-            map.removeLayer(layers.transmission);
-          }
+          if (e.target.checked) map.addLayer(layers.transmission);
+          else map.removeLayer(layers.transmission);
         });
 
         document.getElementById('chk-substation').addEventListener('change', (e) => {
-          if (e.target.checked) {
-            map.addLayer(layers.substation);
-          } else {
-            map.removeLayer(layers.substation);
-          }
+          if (e.target.checked) map.addLayer(layers.substation);
+          else map.removeLayer(layers.substation);
         });
 
         document.getElementById('chk-distribution').addEventListener('change', (e) => {
-          if (e.target.checked) {
-            map.addLayer(layers.distribution);
-          } else {
-            map.removeLayer(layers.distribution);
-          }
+          if (e.target.checked) map.addLayer(layers.distribution);
+          else map.removeLayer(layers.distribution);
         });
       })
       .catch(err => console.error("Greška pri učitavanju stanica:", err));
+
+    // SEARCH
+
+    function searchStationByName() {
+      const input = document.getElementById('search-input');
+      const query = input.value.trim().toLowerCase();
+      if (!query) return;
+
+      let foundIdx = null;
+      for (let i = 0; i < allFeatures.length; i++) {
+        const name = (allFeatures[i].properties.naziv || '').toLowerCase();
+        if (name.includes(query)) {
+          foundIdx = i;
+          break;
+        }
+      }
+
+      if (foundIdx === null) {
+        alert(`Nema stanice koja sadrži: "${query}"`);
+        return;
+      }
+
+      const f = allFeatures[foundIdx];
+      const lat = f.geometry.coordinates[1];
+      const lon = f.geometry.coordinates[0];
+
+      const marker = featureMarkers[foundIdx];
+      if (marker) {
+        map.flyTo([lat, lon], 10, { animate: true, duration: 1.0 });
+        marker.openPopup();
+      }
+    }
+
+    document.getElementById('search-btn').addEventListener('click', searchStationByName);
+    document.getElementById('search-input').addEventListener('keyup', (e) => {
+      if (e.key === 'Enter') {
+        searchStationByName();
+      }
+    });
   </script>
 </body>
 </html>
