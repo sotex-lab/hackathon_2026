@@ -33,47 +33,35 @@ def _to_coord(row):
 
 
 def _euclidean_distance(a, b):
-    # a, b su [lon, lat]
     return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
 
 
-def _build_single_polyline(source_coord, child_coords):
+def _order_by_nearest(start_coord, coords):
     """
-    Pravi JEDAN LineString za feeder:
-    - kreće iz source čvora
-    - prolazi kroz sve child čvorove
-    - child čvorove redja nearest-neighbor heuristikom
-
-    Ovo NIJE stvarna elektro-trasa, nego vizuelna aproksimacija
-    kada nemaš stvarne intermediate tačke voda.
+    Vraća coords poređane nearest-neighbor heuristikom
+    počevši od start_coord.
     """
-    if not source_coord or not child_coords:
-        return None
+    if not start_coord or not coords:
+        return []
 
-    unique_children = []
+    unique_coords = []
     seen = set()
 
-    for c in child_coords:
+    for c in coords:
         key = (round(c[0], 6), round(c[1], 6))
         if key not in seen:
             seen.add(key)
-            unique_children.append(c)
+            unique_coords.append(c)
 
-    if not unique_children:
-        return None
-
-    ordered = [source_coord]
-    remaining = unique_children[:]
-    current = source_coord
+    ordered = []
+    remaining = unique_coords[:]
+    current = start_coord
 
     while remaining:
         nearest = min(remaining, key=lambda x: _euclidean_distance(current, x))
         ordered.append(nearest)
         remaining.remove(nearest)
         current = nearest
-
-    if len(ordered) < 2:
-        return None
 
     return ordered
 
@@ -97,7 +85,7 @@ def data_trafostanice():
             },
             "properties": {
                 "id": row.get("Id"),
-                "naziv": row["Name"] or "Nepoznato",
+                "naziv": row.get("Name") or "Nepoznato",
                 "tip": "transmission",
             },
         })
@@ -113,7 +101,7 @@ def data_trafostanice():
             },
             "properties": {
                 "id": row.get("Id"),
-                "naziv": row["Name"] or "Nepoznato",
+                "naziv": row.get("Name") or "Nepoznato",
                 "tip": "substation",
             },
         })
@@ -129,7 +117,7 @@ def data_trafostanice():
             },
             "properties": {
                 "id": row.get("Id"),
-                "naziv": row["Name"] or "Nepoznato",
+                "naziv": row.get("Name") or "Nepoznato",
                 "tip": "distribution",
             },
         })
@@ -143,12 +131,18 @@ def data_trafostanice():
 @app.route("/data/vodovi")
 def data_vodovi():
     """
-    Vraća vodove kao GeoJSON LineString.
-    Logika:
-    - Feeders33: source = TS, children = SS iz Feeder33Substation + direktni DT preko Feeder33Id
-    - Feeders11: source = SS, children = DT preko Feeder11Id
+    Hijerarhija po slici:
 
-    Za svaki feeder pravimo JEDAN LineString.
+    F33:
+      TS -> SS
+      TS -> DT (direktno)  [dozvoljeno]
+
+    F11:
+      SS -> DT             [standard]
+      TS -> DT             [trade F11]
+
+    Geometrija je i dalje vizuelna aproksimacija jer nemamo stvarnu GIS trasu.
+    Veze između čvorova su stvarne iz baze.
     """
     trans_repo = TransmissionStationRepository()
     sub_repo = SubstationRepository()
@@ -194,6 +188,8 @@ def data_vodovi():
 
     # ---------------------------
     # FEEDERS 33
+    # Hijerarhija:
+    # TS -> SS -> (eventualno kasnije direktni DT)
     # ---------------------------
     for feeder in feeder33_rows:
         feeder_id = feeder.get("Id")
@@ -208,28 +204,44 @@ def data_vodovi():
         if not source_coord:
             continue
 
-        child_coords = []
+        substation_coords = []
+        distribution_coords = []
+        station_keys = []
 
-        # Substations povezane preko junction tabele
+        if ts_id is not None:
+            station_keys.append(f"transmission:{ts_id}")
+
+        # 1) prvo SS
         for sub_id in feeder33_to_substations.get(feeder_id, []):
             sub_row = substation_by_id.get(sub_id)
             if not sub_row:
                 continue
             coord = _to_coord(sub_row)
             if coord:
-                child_coords.append(coord)
+                substation_coords.append(coord)
+                station_keys.append(f"substation:{sub_id}")
 
-        # DistributionSubstation direktno vezane na Feeder33
+        # 2) onda eventualni direktni DT na F33
         for dist_id in feeder33_to_distributions.get(feeder_id, []):
             dist_row = distribution_by_id.get(dist_id)
             if not dist_row:
                 continue
             coord = _to_coord(dist_row)
             if coord:
-                child_coords.append(coord)
+                distribution_coords.append(coord)
+                station_keys.append(f"distribution:{dist_id}")
 
-        coords = _build_single_polyline(source_coord, child_coords)
-        if not coords:
+        ordered_substations = _order_by_nearest(source_coord, substation_coords)
+
+        last_coord = source_coord
+        if ordered_substations:
+            last_coord = ordered_substations[-1]
+
+        ordered_distributions = _order_by_nearest(last_coord, distribution_coords)
+
+        coords = [source_coord] + ordered_substations + ordered_distributions
+
+        if len(coords) < 2:
             continue
 
         features.append({
@@ -244,30 +256,53 @@ def data_vodovi():
                 "tip": "feeder33",
                 "source_type": "transmission",
                 "source_id": ts_id,
-                "children_count": len(child_coords),
+                "children_count": len(substation_coords) + len(distribution_coords),
                 "nameplate_rating": feeder.get("NameplateRating"),
                 "meter_id": feeder.get("MeterId"),
+                "station_keys": station_keys,
             },
         })
 
     # ---------------------------
     # FEEDERS 11
+    # Hijerarhija:
+    # standardno: SS -> DT
+    # trade F11: TS -> DT
     # ---------------------------
     for feeder in feeder11_rows:
         feeder_id = feeder.get("Id")
         feeder_name = feeder.get("Name") or f"Feeder11 #{feeder_id}"
+
         ss_id = feeder.get("SsId")
-        #print("FEEDER11:", feeder_id, feeder_name, "SsId =", ss_id)
-        source_row = substation_by_id.get(ss_id)
-        if not source_row:
-            #print("  -> NEMA source substation za SsId =", ss_id)
+        ts_id = feeder.get("TsId")
+
+        source_row = None
+        source_coord = None
+        source_type = None
+        source_id = None
+        station_keys = []
+
+        # PRIORITET:
+        # ako ima SS -> standardni F11
+        # ako nema SS, a ima TS -> trade F11
+        if ss_id is not None and ss_id in substation_by_id:
+            source_row = substation_by_id.get(ss_id)
+            source_coord = _to_coord(source_row)
+            source_type = "substation"
+            source_id = ss_id
+            station_keys.append(f"substation:{ss_id}")
+
+        elif ts_id is not None and ts_id in transmission_by_id:
+            source_row = transmission_by_id.get(ts_id)
+            source_coord = _to_coord(source_row)
+            source_type = "transmission"
+            source_id = ts_id
+            station_keys.append(f"transmission:{ts_id}")
+
+        if not source_row or not source_coord:
             continue
 
-        source_coord = _to_coord(source_row)
-        if not source_coord:
-            continue
-
-        child_coords = []
+        distribution_coords = []
 
         for dist_id in feeder11_to_distributions.get(feeder_id, []):
             dist_row = distribution_by_id.get(dist_id)
@@ -275,13 +310,13 @@ def data_vodovi():
                 continue
             coord = _to_coord(dist_row)
             if coord:
-                child_coords.append(coord)
+                distribution_coords.append(coord)
+                station_keys.append(f"distribution:{dist_id}")
 
-        #print("FEEDER11:", feeder_id, feeder_name)
-        #print("  -> broj DT children:", len(child_coords))
+        ordered_distributions = _order_by_nearest(source_coord, distribution_coords)
+        coords = [source_coord] + ordered_distributions
 
-        coords = _build_single_polyline(source_coord, child_coords)
-        if not coords:
+        if len(coords) < 2:
             continue
 
         features.append({
@@ -294,13 +329,15 @@ def data_vodovi():
                 "id": feeder_id,
                 "naziv": feeder_name,
                 "tip": "feeder11",
-                "source_type": "substation",
-                "source_id": ss_id,
-                "children_count": len(child_coords),
+                "source_type": source_type,
+                "source_id": source_id,
+                "children_count": len(distribution_coords),
                 "nameplate_rating": feeder.get("NameplateRating"),
                 "meter_id": feeder.get("MeterId"),
                 "parent_feeder33_id": feeder.get("Feeder33Id"),
-                "ts_id": feeder.get("TsId"),
+                "ts_id": ts_id,
+                "ss_id": ss_id,
+                "station_keys": station_keys,
             },
         })
 
